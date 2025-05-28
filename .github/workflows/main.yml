@@ -6,8 +6,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    outputs:
-      deploy-result: ${{ steps.deploy-check.outcome }}
 
     steps:
       - name: Checkout repository
@@ -26,7 +24,7 @@ jobs:
           chmod 400 devops-key-1.pem
 
       - name: Launch EC2 instance
-        id: ec2-launch
+        id: ec2
         run: |
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id ami-0c7217cdde317cfec \
@@ -68,30 +66,35 @@ jobs:
             sudo systemctl start nginx
           EOF
 
-      - name: Mark deployment step status
-        id: deploy-check
-        run: echo "done"
-        # This step simply exists to get the job outcome to outputs
-
   notify:
     needs: deploy
     runs-on: ubuntu-latest
-    if: always()  # Ensure it runs even if deploy job fails
+    if: always()
 
     steps:
-      - name: Send deployment result email
-        uses: dawidd6/action-send-mail@v3
-        with:
-          # SMTP server credentials stored in secrets
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          subject: EC2 Deployment Result - ${{ needs.deploy.result == 'success' && 'PASS' || 'FAIL' }}
-          to: youremail@example.com  # Change to your actual email or pass as secret
-          from: yourbot@example.com  # Sender email
-          body: |
-            The EC2 Deployment workflow has completed.
-            Result: ${{ needs.deploy.result == 'success' && 'PASS' || 'FAIL' }}.
+      - name: Notify Microsoft Teams
+        run: |
+          RESULT="${{ needs.deploy.result }}"
+          COLOR="FFA500"
+          STATUS="⚠️ Deployment Status Unknown"
 
-            Please check the GitHub Actions logs for details.
+          if [ "$RESULT" == "success" ]; then
+            COLOR="00FF00"
+            STATUS="✅ Deployment Succeeded"
+          elif [ "$RESULT" == "failure" ]; then
+            COLOR="FF0000"
+            STATUS="❌ Deployment Failed"
+          fi
+
+          curl -H 'Content-Type: application/json' \
+            -d "{
+              \"@type\": \"MessageCard\",
+              \"@context\": \"http://schema.org/extensions\",
+              \"themeColor\": \"$COLOR\",
+              \"summary\": \"EC2 Deployment Status\",
+              \"sections\": [{
+                \"activityTitle\": \"$STATUS\",
+                \"text\": \"The EC2 deployment workflow has completed with result: **$RESULT**.\n\n[View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\"
+              }]
+            }" \
+            ${{ secrets.TEAMS_WEBHOOK }}
